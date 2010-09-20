@@ -47,14 +47,16 @@ var SETTEE = (function() {
         
         for (i = 0; i < oldRows.length; i += 1) {
           rows.push(cloneObj(oldRows[i].value));
-          rows[i].date = new Date(toJsTime(oldRows[i].value.date))
-            .format("mmm/dd/yy HH:MM");
+          rows[i].date = formatDate(toJsTime(oldRows[i].value.date));          
+
           rows[i].href = "#sub/" + oldRows[i].value._id
             + "/" + oldRows[i].value.sourceLink;
           rows[i].unread = (oldRows[i].value.read === true)
             ? "read" : "unread";
         }
+        
         tmp.rows = rows;
+        tmp.updated = prettyDate(new Date(toJsTime(tmp.updated)));        
         
         $("#mainpanel")
           .html(Mustache.to_html($("#subscription_tpl").html(), tmp));
@@ -151,8 +153,7 @@ var SETTEE = (function() {
         ? "#subscription/" + rowCopy.sourceLink
         : pagerFromOpts(opts);
       
-      rowCopy.date    = new Date(toJsTime(rowCopy.date))
-        .format("mmm/dd/yy HH:MM");
+      rowCopy.date = formatDate(toJsTime(rowCopy.date));
       
       $("#mainpanel").html(Mustache.to_html($("#item_tpl").html(), rowCopy));
       
@@ -219,7 +220,8 @@ var SETTEE = (function() {
         vars.rows.push({
           unread   : (v.read === true) ? "read" : "unread",
           href     : "#item/" + current + "/" + item.key,
-          date     : new Date(toJsTime(v.date)).format("mmm/dd/yy HH:MM"),
+          date     : formatDate(toJsTime(v.date)),
+//          date     : new Date(toJsTime(v.date)).format("mmm/dd/yy HH:MM"),
           srcTitle : v.sourceTitle,
           title    : v.title
         });
@@ -248,7 +250,20 @@ var SETTEE = (function() {
       $id.html(Mustache.to_html($template.html(), cb(data)));
     });
   };
-  
+
+  function formatDate(date) {
+    
+    var now   = new Date(),
+        today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                          
+    if (date > today.getTime()) {
+      return new Date(date).format("HH:MM");
+    } else if (date > new Date(now.getFullYear(), 0, 0).getTime()) {
+      return new Date(date).format("dd mmm");
+    }
+    return new Date(date).format("dd/mm/yyyy");
+  }
+    
   function keySearch(arr, key, val) {
     for (var i = 0; i < arr.length; i += 1) {
       if (arr[i][key] === val) {
@@ -315,7 +330,9 @@ var SETTEE = (function() {
 
   db.info({
     "success": function(data) {
-      badComet(data.update_seq);
+      setTimeout(function() { 
+        badComet(data.update_seq);
+      }, 100);
     }
   });
   
