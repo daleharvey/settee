@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+    <title>Settee</title>
+    <link rel="stylesheet" href="style/main.css" type="text/css">
+  </head>
+
+  <body>
+
+    <div id="sidebar">
+
+      <h1><a href="">Settee</a></h1>
+      
+      <ul>
+        <li><a href="#">All Items</a></li>
+      </ul>
+      <br />
+      <h2>Subscriptions</h2>
+      <div id="subscriptions"></div>
+      <br />
+      <form action="#addfeed">
+        <h2>Subscribe to Feed</h2>
+        <input type="text" placeholder="Enter Url" id="subscribeurl" /><br />
+        <input type="submit" value="Add" class="btn" id="addbtn" />
+        <span id="feedback"></span>
+      </form>
+      
+    </div>
+    
+    <div id="mainpanel"></div>
+
+    <!-- Here be templates! -->
+    <script type="text/html" id="subscription_tpl">
+      <div class="header">
+        <strong>{{_id}}</strong><br />
+        <a href="{{_id}}">(feed link)</a>
+        <form action="#delete" class="deleteform">
+          <input type="hidden" name="id" value="{{_id}}" />
+          <input type="submit" value="delete subscription" class="btn delete" />
+        </form>
+      </div>
+      <table cellspacing="0">
+        {{#rows}}      
+        <tr>
+          <td class="source left"><a href="{{href}}">{{sourceTitle}}</a></td>
+          <td class="title {{unread}}"><a href="{{href}}">{{title}}</a></td>
+          <td class="date"><a href="{{href}}">{{date}}</a></td>
+        </tr>
+        {{/rows}}      
+      </table>
+    </script>
+
+    <script type="text/html" id="subscriptions_tpl">      
+      <ul>
+        {{#rows}}
+        <li class="sub"><a href="#subscription/{{url}}">{{desc}}</a></li>
+        {{/rows}}
+      </ul>
+    </script>
+    
+    <script type="text/html" id="feeds_tpl">
+      <div class="header">
+        {{{newer}}}
+        {{{start}} - {{end}} of {{total}} 
+        {{{older}}}
+      </div>
+      <table cellspacing="0">
+        {{#rows}}      
+        <tr>
+          <td class="source left"><a href="{{href}}">{{srcTitle}}</a></td>
+          <td class="title {{unread}}"><a href="{{href}}">{{title}}</a></td>
+          <td class="date"><a href="{{href}}">{{date}}</a></td>
+        </tr>
+        {{/rows}}
+        {{^rows}}
+        <tr>
+          <td class="left"><em>You dont have any feeds to read :(</em></td>
+        </tr>
+        {{/rows}}
+      </table>
+      <div class="footer">
+        {{{newer}}}
+        {{{start}} - {{end}} of {{total}} 
+        {{{older}}}
+      </div>
+    </script>
+    
+    <script type="text/html" id="item_tpl">
+      <div class="header">
+        <a href="#items/{{current}}">&laquo; Back to List View</a>
+      </div>
+      <div class="body">
+        <strong>{{title}}</strong>
+        <p class="info">
+          {{date}}, from <a href="{{sourceLink}}">{{sourceTitle}}</a>
+          {{author}}
+        </p>
+        <div class="content">
+          <p>{{{body}}}</p>
+        </div>
+      </div>
+    </script>
+
+  </body>
+
+  <script src="vendor/couchapp/loader.js"></script>
+  <script src="./mustache.js"></script>
+
+  <script src="./utils.js"></script>
+  <script src="./settee.js"></script>
+
+</html>
