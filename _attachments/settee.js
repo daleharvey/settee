@@ -13,55 +13,33 @@ var SETTEE = (function() {
   });
 
   router.get("items/:key", function(key) {
-    showFeedItems(createOpts(key));
+    showFeedItems(createPagerOpts(key));
   });
 
   router.get("item/:page/:item", function(page, item) {
-    showFeedItem("feed-items", "key", createOpts(page), item);
-    //showFeedItem("all-feeds", "key", createOpts(page), item);
+    showFeedItem("feed-items", "key", createPagerOpts(page), item);
   });
 
   router.get(/sub\/([^\/]+)\/(.+)/, function(item, id) {
-    ensureCache("all-feeds", false, function (feeddata) {        
-
-      // eugh, I strip http:// because it screws with regex matches
-      // for the router
-      var obj = keySearch(feeddata.rows, "id", id);
-      if (!obj) {
-        id = "http://" + id;
-        obj = keySearch(feeddata.rows, "id", id);
-      }
-
-      var opts = {
-          endkey     : JSON.stringify([id]),
-          startkey   : JSON.stringify([id, {}]),
-          descending : true
-      };
-
-      showFeedItem("items-by-feed", "id", opts, item);
-      //showFeedItem2(opts, item);
+    ensureCache("all-feeds", false, function (feeddata) {
+      showFeedItem("items-by-feed", "id",
+                   createSubOpts(id, feeddata.rows), item);
     });
   });
   
   router.get(/subscription\/(.+)/, function(id) {
     
-    ensureCache("all-feeds", false, function (feeddata) {        
+    ensureCache("all-feeds", false, function (feed) {        
 
       // eugh, I strip http:// because it screws with regex matches
       // for the router
-      var obj = keySearch(feeddata.rows, "id", id);
+      var obj = keySearch(feed.rows, "id", id);
       if (!obj) {
         id = "http://" + id;
-        obj = keySearch(feeddata.rows, "id", id);
+        obj = keySearch(feed.rows, "id", id);
       }
-
-      var opts = {
-          endkey     : JSON.stringify([id]),
-          startkey   : JSON.stringify([id, {}]),
-          descending : true
-      };
       
-      ensureCache("items-by-feed", opts, function (data) {
+      ensureCache("items-by-feed", createSubOpts(id, feed.rows), function (data) {
         
         var i, rows = [],
             oldRows = data.rows.slice(0),
@@ -109,15 +87,18 @@ var SETTEE = (function() {
     };
     
     $.couch.db(dbName).saveDoc(doc, {
-      success : function() { showFeedback($("#feedback"), "saved"); },
+      success : function() {
+        showFeedback($("#feedback"), "saved");
+        $("#subscribeurl").val("");
+      },
       error   : function() { showFeedback($("#feedback"), "already exists"); }
     });
     
   });
-
+  
   // Create the parameters sent to the view listing determing from
   // the key given
-  function createOpts(key) {
+  function createPagerOpts(key) {
     
     var opts = cloneObj(defaultOpts);
 
@@ -131,6 +112,22 @@ var SETTEE = (function() {
     return opts;
   };
   
+  function createSubOpts(id, rows) {
+    // eugh, I strip http:// because it screws with regex matches
+    // for the router
+        var obj = keySearch(rows, "id", id);
+    if (!obj) {
+      id = "http://" + id;
+      obj = keySearch(rows, "id", id);
+    }
+    
+    return {
+      endkey     : JSON.stringify([id]),
+      startkey   : JSON.stringify([id, {}]),
+      descending : true
+    };
+  };
+  
   function showFeedItem(feed, key, opts, item) {
     
     ensureCache(feed, opts, function (data) {
@@ -142,9 +139,7 @@ var SETTEE = (function() {
       // condition with changes
       if (row.value.read+'' !== "true") {
         row.value.read = true;
-        db.saveDoc(row.value, {
-          "error": function() { console.log("on noes"); }
-        });
+        db.saveDoc(row.value, { "error": function() { } });
       }
 
       // fun way to remove script tags
@@ -162,37 +157,7 @@ var SETTEE = (function() {
       $("#mainpanel").html(Mustache.to_html($("#item_tpl").html(), rowCopy));
       
     });    
-  };
-    
-  function showFeedItem2(opts, item) {
-      
-    ensureCache("items-by-feed", opts, function (data) {
-
-      var row     = keySearch(data.rows, "id", item),
-          rowCopy = cloneObj(row.value);
-      
-      // Dunno where json is losing bools, TODO, there is also a race
-      // condition with changes
-      if (row.value.read+'' !== "true") {
-        row.value.read = true;
-        db.saveDoc(row.value, {
-          "error": function() { console.log("on noes"); }
-        });
-      }
-
-      // fun way to remove script tags
-      var tmp = $("<foo>" + rowCopy.body + "</foo>");
-      tmp.find("script").remove();
-      rowCopy.body = tmp.html();
-      
-      rowCopy.current = "#subscription/" + rowCopy.sourceLink;
-      rowCopy.date    = new Date(toJsTime(rowCopy.date))
-        .format("mmm/dd/yy HH:MM");
-      
-      $("#mainpanel").html(Mustache.to_html($("#item_tpl").html(), rowCopy));
-      
-    });    
-  };  
+  };    
     
   function toUnixTime(time) {
     return Math.round(time / 1000);
@@ -264,8 +229,6 @@ var SETTEE = (function() {
   };  
   
   function ensureCache(view, opts, cb) {
-
-    console.log("err", opts);
     
     var id  = view + (opts && JSON.stringify(opts) || ""),
         url = "/" + dbName + "/_design/" + dbName + "/_view/" + view;
@@ -336,12 +299,18 @@ var SETTEE = (function() {
   function badComet(seq) {
     var url = "/" + dbName + "/_changes?heartbeat=10000&" + 
       "include_docs=true&feed=longpoll&since=" + seq;
-    $.get(url, function(data) {
-      views = {};
-      fetchSubscriptions();
-      router.refresh();
-      badComet(data.last_seq);
-    }, "json");
+    $.ajax({
+      url      : url,
+      method   : "GET",
+      dataType : "json",
+      error    : function() { console.error(arguments); },
+      success  : function(data) {
+        views = {};
+        fetchSubscriptions();
+        router.refresh();
+        badComet(data.last_seq);
+      }
+    });
   };
 
   db.info({

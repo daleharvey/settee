@@ -149,7 +149,7 @@ li { padding-left:10px; }
      display:inline;
 }
 
-#addbtn { 
+#addbtn {
     margin-top:5px;
 }
 
@@ -160,4 +160,9 @@ form { display:inline; }
 
 .sub { 
     white-space:nowrap; 
+}
+
+#subscribeurl { 
+    display:block;
+    width:100%;
 }
