@@ -40,6 +40,7 @@
           <input type="submit" value="delete subscription" class="btn delete" />
         </form>
       </div>
+      {{{error}}}
       <table cellspacing="0">
         {{#rows}}      
         <tr>
@@ -48,6 +49,11 @@
           <td class="date"><a href="{{href}}">{{date}}</a></td>
         </tr>
         {{/rows}}      
+        {{^rows}}
+        <tr>
+          <td class="left"><em>You dont have any feeds to read :(</em></td>
+        </tr>
+        {{/rows}}
       </table>
       <div class="footer">
         <div class="updated">
@@ -88,6 +94,7 @@
         {{/rows}}
       </table>
       <div class="footer">
+        &nbsp;
         <div class="pager">
           <div class="newer">{{{newer}}}&nbsp;</div>
           <div class="counts">{{{start}} - {{end}} of {{total}}</div>
@@ -98,7 +105,7 @@
     
     <script type="text/html" id="item_tpl">
       <div class="header">
-        <a href="#items/{{current}}">&laquo; Back to List View</a>
+        <a href="{{backlink}}">&laquo; Back to List View</a>
       </div>
       <div class="body">
         <strong>{{title}}</strong>
@@ -109,6 +116,9 @@
         <div class="content">
           <p>{{{body}}}</p>
         </div>
+      </div>
+      <div class="footer">
+        <a href="{{backlink}}">&laquo; Back to List View</a>
       </div>
     </script>
 

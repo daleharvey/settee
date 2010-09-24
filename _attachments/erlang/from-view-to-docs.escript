@@ -21,17 +21,39 @@ main([]) ->
     {"rows", {array, Feeds}} = lists:keyfind("rows", 1, JSON),
 
     Res = lists:foldl(fun(X, Y) -> processFeed(X, Y) end, sets:new(), Feeds),
-    io:format("Yay ~p~n", [sets:to_list(Res)]),
+    [ markProcessed(Id) || Id <- sets:to_list(Res) ],
+    
+    ok.
+
+markProcessed(Id) ->
+    %% = ,
+    {ok, {{_, 200, _}, _Hdrs, Body}} =
+        httpc:request(couch() ++ "/" ++ db() ++ "/" ++ Id),
+
+    Json = mochijson:decode(Body),
+    Json1 = json_set(["processed"], "true", Json),
+    
+    Opts = {couch() ++ "/" ++ db() ++ "/" ++ Id, [],
+            "application/json",
+            lists:flatten(mochijson:encode(Json1))},
+    
+    case httpc:request(put, Opts, [], []) of 
+        {ok, {{_, 201, _}, _, _}} ->   
+            io:format("Saved ~p ~n", [Id]);
+        {ok, {{_, 409, _}, _, _}} ->
+            io:format("Revision Error ~p ~n",[Id])
+    end,                     
+    
     ok.
 
 processFeed({struct, Item}, Set) ->
     
     try
-        {"id", Id} = lists:keyfind("id", 1, Item),
         {"value", Old} = lists:keyfind("value", 1, Item),
         
         {struct, Vals} = Old,
         {"body", Body} = lists:keyfind("body", 1, Vals),
+        {"sourceId", SourceId} = lists:keyfind("sourceId", 1, Vals),
         NewId = md5_hex(Body),
         
         NewDoc1 = json_set(["read"], "false", Old),
@@ -49,7 +71,7 @@ processFeed({struct, Item}, Set) ->
                 io:format("Duplicate ~p ~n",[NewId])
         end,                     
         
-        sets:add_element(Id, Set)
+        sets:add_element(SourceId, Set)
         
     catch
         _Err:_ ->

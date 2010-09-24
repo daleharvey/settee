@@ -206,3 +206,5 @@ form { display:inline; }
     color:#666; 
     text-align:right;
 }
+
+.error { text-align:center; background:#red; color:white; }

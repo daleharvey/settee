@@ -3,7 +3,8 @@ function(doc) {
   var exports = {}; // So md5.js doesnt blow up
   // !code vendor/couchapp/lib/md5.js 
     
-  if (doc.type && doc.type === "batchfeed") {
+  if (doc.type && doc.type === "batchfeed" &&
+      (!doc.processed || doc.processed === false) ) {
     
     var i, item, body, date,
         re   = /^<\?xml\s+version\s*=\s*(["'])[^\1]+\1[^?]*\?>/,

@@ -5,68 +5,31 @@ var SETTEE = (function() {
       db            = $.couch.db(dbName),
       perPage       = 21,
       defaultOpts   = {descending: true, limit: perPage},
-      subscriptions = {},
+      readItems     = {},
       views         = {};
   
   router.get("", function() {
     showFeedItems(defaultOpts);
   });
-
+  
   router.get("items/:key", function(key) {
     showFeedItems(createPagerOpts(key));
   });
-
-  router.get("item/:page/:item", function(page, item) {
-    showFeedItem("feed-items", "key", createPagerOpts(page), item);
+  
+  router.get("item/:page/:item", function(page, id) {
+    var back = (page === "home") ? "#" : "#items/" + page;
+    showFeedItem(back, id);
   });
 
-  router.get(/sub\/([^\/]+)\/(.+)/, function(item, id) {
-    ensureCache("all-feeds", false, function (feeddata) {
-      showFeedItem("items-by-feed", "id",
-                   createSubOpts(id, feeddata.rows), item);
-    });
+  router.get(/sub\/([^\/]+)\/(.+)/, function(id, feed) {
+    showFeedItem("#subscription/" + feed, id);    
   });
   
-  router.get(/subscription\/(.+)/, function(id) {
-    
-    ensureCache("all-feeds", false, function (feed) {        
-
-      // eugh, I strip http:// because it screws with regex matches
-      // for the router
-      var obj = keySearch(feed.rows, "id", id);
-      if (!obj) {
-        id = "http://" + id;
-        obj = keySearch(feed.rows, "id", id);
-      }
-      
-      ensureCache("items-by-feed", createSubOpts(id, feed.rows), function (data) {
-        
-        var i, rows = [],
-            oldRows = data.rows.slice(0),
-            tmp = cloneObj(obj.value);
-        
-        for (i = 0; i < oldRows.length; i += 1) {
-          rows.push(cloneObj(oldRows[i].value));
-          rows[i].date = formatDate(toJsTime(oldRows[i].value.date));          
-
-          rows[i].href = "#sub/" + oldRows[i].value._id
-            + "/" + oldRows[i].value.sourceLink;
-          rows[i].unread = (oldRows[i].value.read === true)
-            ? "read" : "unread";
-        }
-        
-        tmp.rows = rows;
-        tmp.updated = prettyDate(new Date(toJsTime(tmp.updated)));        
-        
-        $("#mainpanel")
-          .html(Mustache.to_html($("#subscription_tpl").html(), tmp));
-      });
-    });
-  });
-
+  router.get(/subscription\/(.+)/, showSubscription);
+  
   router.post("delete", function(e) {
     
-    ensureCache("all-feeds", false, function(data) {
+    ensureViewCache("all-feeds", false, function(data) {
       
       var form = $(e.target),
           id   = form.find("input[name=id]").val(),
@@ -79,24 +42,77 @@ var SETTEE = (function() {
   
   router.post("addfeed", function(e) {
     
-    var doc = {
-      _id     : $("#subscribeurl").val(),
-      url     : $("#subscribeurl").val(),
-      type    : "feed",
-      status  : {text : "not read yet", cssClass:"ok"},
-      added   : toUnixTime(new Date().getTime()),
-      updated : 0
-    };
+    var url = $("#subscribeurl").val(),
+        doc = {
+          _id     : url,
+          url     : url,
+          type    : "feed",
+          status  : {text : "not read yet", cssClass:"ok"},
+          added   : toUnixTime(new Date().getTime()),
+          updated : 0
+        };
     
     $.couch.db(dbName).saveDoc(doc, {
       success : function() {
+        document.location.href = "#subscription/" + url; 
         showFeedback($("#feedback"), "saved");
         $("#subscribeurl").val("");
       },
-      error   : function() { showFeedback($("#feedback"), "already exists"); }
+      error : function() {
+        showFeedback($("#feedback"), "already exists");
+      }
     });
     
   });
+
+  function showSubscription(id) {
+    
+    ensureViewCache("all-feeds", false, function (feed) {
+      
+      // eugh, I strip http:// because it screws with regex matches
+      // for the router, need to search for invalid urls that dont start
+      // width http:// too
+      var opts = createSubOpts(id, feed.rows),
+          doc = keySearch(feed.rows, "id", id);
+      
+      if (!doc) {
+        id = "http://" + id;
+        doc = keySearch(feed.rows, "id", id).value;
+      } else {
+        doc = doc.value;
+      }
+
+      ensureViewCache("items-by-feed", opts, function (data) {
+
+        var i, item, rows = [];
+        
+        for (i = 0; i < data.rows.length; i += 1) {
+          
+          item = data.rows[i].value;
+          console.log(item);
+          rows.push({
+            title       : item.title,
+            sourceTitle : item.sourceTitle,
+            date        : formatDate(toJsTime(item.date)),
+            href        : "#sub/" + item._id + "/" + item.sourceLink,
+            unread      : (item.read) ? "read" : "unread"
+          });
+          
+        }
+        
+        if (doc.status && doc.status.cssClass === "error") {
+          doc.error = "<div class='error'><strong>error!</strong> "
+            + doc.status.text + "</div>";
+        }
+
+        doc.rows = rows;
+        doc.updated = prettyDate(new Date(toJsTime(doc.updated)));
+        
+        render("#mainpanel", "#subscription_tpl", doc);
+        
+      });
+    });
+  };
   
   // Create the parameters sent to the view listing determing from
   // the key given
@@ -115,9 +131,10 @@ var SETTEE = (function() {
   };
   
   function createSubOpts(id, rows) {
+    
     // eugh, I strip http:// because it screws with regex matches
     // for the router
-        var obj = keySearch(rows, "id", id);
+    var obj = keySearch(rows, "id", id);
     if (!obj) {
       id = "http://" + id;
       obj = keySearch(rows, "id", id);
@@ -130,36 +147,45 @@ var SETTEE = (function() {
     };
   };
   
-  function showFeedItem(feed, key, opts, item) {
-    
-    ensureCache(feed, opts, function (data) {
-      
-      var row     = keySearch(data.rows, key, item),
-          rowCopy = cloneObj(row.value);
-      
-      // Dunno where json is losing bools, TODO, there is also a race
-      // condition with changes
-      if (row.value.read+'' !== "true") {
-        row.value.read = true;
-        db.saveDoc(row.value, { "error": function() { } });
-      }
+  function showFeedItem(backLink, id) {
 
-      // fun way to remove script tags
-      var tmp = $("<foo>" + rowCopy.body + "</foo>");
-      tmp.find("script").remove();
-      rowCopy.body = tmp.html();
+    var show = function(doc) {
+
+      if (!doc.read) {
+        doc.read = true;
+        // race condition when marking read
+        db.saveDoc(doc, { "error": function(){} });
+      }      
       
-      rowCopy.current = (feed === "items-by-feed")
-        ? "#subscription/" + rowCopy.sourceLink
-        : pagerFromOpts(opts);
-      
-      rowCopy.date = formatDate(toJsTime(rowCopy.date));
-      
-      $("#mainpanel").html(Mustache.to_html($("#item_tpl").html(), rowCopy));
-      
-    });    
-  };    
-    
+      doc.body = stripScriptTags(doc.body);
+      doc.backlink = backLink;    
+      doc.date = formatDate(toJsTime(doc.date));
+
+      render("#mainpanel", "#item_tpl", doc);
+    };
+
+    if (typeof readItems[id] === "undefined") {
+      db.openDoc(id, {
+        success : function(data) {
+          readItems[id] = data;
+          show(cloneObj(data));
+        }
+      });
+    } else {
+      show(cloneObj(readItems[id]));
+    };
+  }
+
+  function stripScriptTags(html) {
+    var tmp = $("<foo>" + html + "</foo>");
+    tmp.find("script").remove();
+    return tmp.html();
+  };
+  
+  function render(dom, tpl, data) {
+    $(dom).html(Mustache.to_html($(tpl).html(), data));
+  };
+  
   function toUnixTime(time) {
     return Math.round(time / 1000);
   };
@@ -169,7 +195,8 @@ var SETTEE = (function() {
 
   function pagerFromOpts(opts) {
     if (opts.startkey) {
-      return ((opts.descending) ? "" : "!") + opts.startkey.replace(/\"/g, "");
+      return ((opts.descending) ? "" : "!")
+        + opts.startkey.replace(/\"/g, "");
     }
     return false;
   };
@@ -179,7 +206,7 @@ var SETTEE = (function() {
     var tpl = $("#feeds_tpl"),
         dom = $("#mainpanel");
     
-    showView("feed-items", opts, dom, tpl, function(data) {
+    showView("feed-listing", opts, dom, tpl, function(data) {
       
       var offset = data.offset,
           rows   = data.rows.slice(0),
@@ -193,7 +220,7 @@ var SETTEE = (function() {
 
       // link to current feeds page, is needed for cache lookup if user
       // reads individual item
-      var current = pagerFromOpts(opts) || rows[0] && rows[0].key || "";
+      var current = pagerFromOpts(opts) || "home";
       
       if (!opts.descending) {
         rows.reverse();
@@ -219,18 +246,17 @@ var SETTEE = (function() {
         v = item.value;        
         vars.rows.push({
           unread   : (v.read === true) ? "read" : "unread",
-          href     : "#item/" + current + "/" + item.key,
+          href     : "#item/" + current + "/" + v._id,
           date     : formatDate(toJsTime(v.date)),
-//          date     : new Date(toJsTime(v.date)).format("mmm/dd/yy HH:MM"),
           srcTitle : v.sourceTitle,
           title    : v.title
         });
       }
       return vars;      
     });
-  };  
+  };
   
-  function ensureCache(view, opts, cb) {
+  function ensureViewCache(view, opts, cb) {
     
     var id  = view + (opts && JSON.stringify(opts) || ""),
         url = "/" + dbName + "/_design/" + dbName + "/_view/" + view;
@@ -238,16 +264,16 @@ var SETTEE = (function() {
     if (typeof views[id] === "undefined") {
       $.get(url, opts, function (data) {
         views[id] = data;
-        cb(views[id]);
+        cb(cloneObj(views[id]));
       }, "json");      
     } else {
-      cb(views[id]);
+      cb(cloneObj(views[id]));
     }
   };
   
   function showView(view, opts, $id, $template, cb) {
-    ensureCache(view, opts, function (data) { 
-      $id.html(Mustache.to_html($template.html(), cb(data)));
+    ensureViewCache(view, opts, function (data) {
+      render($id, $template, cb(data));
     });
   };
 
@@ -312,18 +338,20 @@ var SETTEE = (function() {
   // this must be a nasty way of invalidating views, cant really
   // see if incremental view updates are possible
   function badComet(seq) {
-    var url = "/" + dbName + "/_changes?heartbeat=10000&" + 
-      "include_docs=true&feed=longpoll&since=" + seq;
+    var url = "/" + dbName + "/_changes?heartbeat=10000&" +
+      "&feed=longpoll&since=" + seq;
     $.ajax({
       url      : url,
       method   : "GET",
       dataType : "json",
       error    : function() { console.error(arguments); },
       success  : function(data) {
-        views = {};
-        fetchSubscriptions();
-        router.refresh();
-        badComet(data.last_seq);
+        if (data) { 
+          views = {};
+          fetchSubscriptions();
+          router.refresh();
+          badComet(data.last_seq);
+        }
       }
     });
   };

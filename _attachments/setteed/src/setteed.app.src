@@ -1,0 +1,14 @@
+{application, setteed,
+ [
+  {description, ""},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib,
+                  inets,
+                  crypto
+                 ]},
+  {mod, { setteed_app, []}},
+  {env, []}
+ ]}.

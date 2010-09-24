@@ -14,8 +14,11 @@ main([]) ->
     ok = crypto:start(),
 
     Views = "/" ++ db() ++ "/_design/settee/_view/",
+    Expire = get_unix_timestamp(erlang:now()) - (1 * 60 * 10),
+    Params = "?startkey=0&endkey=" ++ integer_to_list(Expire),
     
-    {ok, {_St, _Hdrs, Body}} = httpc:request(couch() ++ Views ++ view()),
+    {ok, {_St, _Hdrs, Body}}
+        = httpc:request(couch() ++ Views ++ view() ++ Params),
 
     {struct, JSON} = mochijson:decode(Body),
     {"rows", {array, Feeds}} = lists:keyfind("rows", 1, JSON),
@@ -24,8 +27,10 @@ main([]) ->
 
 processFeed(Item) ->
 
-    {"id", RawUrl} = lists:keyfind("id", 1, Item),
     {"value", Old} = lists:keyfind("value", 1, Item),
+    {struct, ValList} = Old,
+    {"_id", RawUrl} = lists:keyfind("_id", 1, ValList),
+
     Url = re:replace(RawUrl, "/", "%2F", [global, {return, list}]),
     
     io:format("Fetching: ~p~n", [RawUrl]),

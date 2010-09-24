@@ -1,0 +1,9 @@
+{application,setteed,
+             [{description,[]},
+              {vsn,"1"},
+              {registered,[]},
+              {applications,[kernel,stdlib,inets,crypto]},
+              {mod,{setteed_app,[]}},
+              {env,[]},
+              {modules,[dh_couch,dh_http,dh_json,mochijson2,reloader,settee,
+                        setteed_app,setteed_srv,setteed_sup]}]}.
