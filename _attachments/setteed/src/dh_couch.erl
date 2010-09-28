@@ -5,6 +5,7 @@
 -export([ db_info/1,
           view/2, view/3,
           changes/3,
+          doc/2,
           save_doc/2 ]).
 
 db_info(Opts) ->
@@ -18,6 +19,12 @@ view(Opts, Name, Params) ->
     Url = str("http://~s/~s/_design/~s/_view/~s",
               [f(host, Opts), f(db, Opts), f(db, Opts), Name]),
     {_Url, _Hdrs, Body} = dh_http:get(Url, Params, [{type, json}]),
+    Body.
+
+doc(Opts, Id) ->
+    Url = str("http://~s/~s/~s", [f(host, Opts), f(db, Opts),
+                                  dh_http:url_encode(Id)]),
+    {_Url, _Hdrs, Body} = dh_http:get(Url, [], [{type, json}]),
     Body.
 
 save_doc(Opts, Doc) ->
@@ -61,8 +68,3 @@ f(Key, List) ->
 
 str(Str, Args) ->
     lists:flatten(io_lib:format(Str, Args)).
-
-get_unix_timestamp(TS) ->
-    calendar:datetime_to_gregorian_seconds(
-      calendar:now_to_universal_time(TS)) -
-        calendar:datetime_to_gregorian_seconds( {{1970,1,1},{0,0,0}} ).

@@ -2,13 +2,13 @@
 -module(setteed_srv).
 -behaviour(gen_server).
 
+-export([ start_link/0, init/1, handle_call/3, handle_cast/2,
+          handle_info/2, terminate/2, code_change/3 ]).
+
 %% Main interface functions
 -export([ read_feeds/0,
           changes_subscribe/0,
           changes_unsubscribe/0 ]).
-
--export([start_link/0, init/1, handle_call/3, handle_cast/2,
-         handle_info/2, terminate/2, code_change/3]).
 
 -record(state, {
           couch_opts  = undefined :: list(),
@@ -16,26 +16,39 @@
          }).
 
 -spec timeout() -> integer().
+%% Amount of time in between polling RSS feeds, (if no activity has
+%% happened)
 timeout() ->
     timer:minutes(2).
 
+-spec read_feeds() -> term().
+%% Just for command like debugging, invoke the reader
 read_feeds() ->
     gen_server:call(?MODULE, read_feeds).
 
+-spec changes_subscribe() -> term().
+%% Listen to the changes feed from couch, so new feeds are read as soon
+%% as they are added
 changes_subscribe() ->
     gen_server:call(?MODULE, changes_subscribe).
+
+-spec changes_unsubscribe() -> term().
+%% Stop listening to the changes feed
 changes_unsubscribe() ->
     gen_server:call(?MODULE, changes_unsubscribe).
+
+-spec opts() -> list().
+%% Options for connecting to couchdb, these should extracted into a config
+%% file 
+opts() ->
+    [{host, "dale:tmppass@127.0.0.1:5984"},
+     {db, "settee"}].
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 init([]) ->
     {ok, #state{couch_opts = opts()}, timeout()}.
-
-opts() ->
-    [{host, "dale:hail99@127.0.0.1:5984"},
-     {db, "settee"}].
 
 %% callbacks
 handle_call(read_feeds, _From, State) ->
@@ -76,7 +89,7 @@ process_read_feeds(Opts) ->
     Items = dh_couch:view(Opts, "items-to-process"),
     Fun   = fun(X, Y) -> save_to_doc(Opts, X, Y) end,
     Res   = lists:foldl(Fun, sets:new(), dh_json:get([<<"rows">>], Items)),
-    [ mark_processed(Id) || Id <- sets:to_list(Res) ],
+    [ mark_processed(Opts, Id) || Id <- sets:to_list(Res) ],
     ok.
 
 save_to_doc(Opts, Item, Set) ->
@@ -95,8 +108,10 @@ save_to_doc(Opts, Item, Set) ->
             Set
     end.
 
-mark_processed(List) ->
-    log(List),
+mark_processed(Opts, Id) ->
+    Doc  = dh_couch:doc(Opts, Id),
+    Doc2 = dh_json:set([<<"processed">>], true, Doc),
+    dh_couch:save_doc(Opts, Doc2),
     ok.    
     
 read_feeds(Opts) ->
