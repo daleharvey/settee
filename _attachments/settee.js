@@ -89,7 +89,6 @@ var SETTEE = (function() {
         for (i = 0; i < data.rows.length; i += 1) {
           
           item = data.rows[i].value;
-          console.log(item);
           rows.push({
             title       : item.title,
             sourceTitle : item.sourceTitle,
@@ -106,7 +105,9 @@ var SETTEE = (function() {
         }
 
         doc.rows = rows;
-        doc.updated = prettyDate(new Date(toJsTime(doc.updated)));
+        doc.updated = doc.updated
+          ? prettyDate(new Date(toJsTime(doc.updated)))
+          : "Never";
         
         render("#mainpanel", "#subscription_tpl", doc);
         
@@ -281,7 +282,7 @@ var SETTEE = (function() {
     
     var now   = new Date(),
         today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-                          
+
     if (date > today.getTime()) {
       return new Date(date).format("HH:MM");
     } else if (date > new Date(now.getFullYear(), 0, 0).getTime()) {
