@@ -4,6 +4,8 @@
               {registered,[]},
               {applications,[kernel,stdlib,inets,crypto]},
               {mod,{setteed_app,[]}},
-              {env,[]},
-              {modules,[dh_couch,dh_http,dh_json,mochijson2,reloader,settee,
-                        setteed_app,setteed_srv,setteed_sup]}]}.
+              {env,[{couch_host,"dale:hail99@127.0.0.1:5984"},
+                    {couch_db,"settee"}]},
+              {modules,[dh_couch,dh_couch_srv,dh_http,dh_json,mochijson2,
+                        mytest_srv,reloader,setteed_app,setteed_srv,
+                        setteed_sup]}]}.

@@ -10,5 +10,8 @@
                   crypto
                  ]},
   {mod, { setteed_app, []}},
-  {env, []}
+  {env, [
+    {couch_host, "dale:hail99@127.0.0.1:5984"},
+    {couch_db,   "settee"}
+  ]}
  ]}.

@@ -6,14 +6,19 @@
           handle_info/2, terminate/2, code_change/3 ]).
 
 %% Main interface functions
--export([ read_feeds/0,
-          changes_subscribe/0,
-          changes_unsubscribe/0 ]).
+-export([ start/0,
+          clread_feeds/0 ]).
 
 -record(state, {
-          couch_opts  = undefined :: list(),
-          changes_pid = undefined :: pid()
+          couch_started = false :: atom()
          }).
+
+%% Will remove once I figure out rebar releases
+start() ->
+    ok = inets:start(),
+    ok = crypto:start(),
+    {ok, _Pid} = reloader:start(),
+    application:start(setteed).
 
 -spec timeout() -> integer().
 %% Amount of time in between polling RSS feeds, (if no activity has
@@ -23,48 +28,19 @@ timeout() ->
 
 -spec read_feeds() -> term().
 %% Just for command like debugging, invoke the reader
-read_feeds() ->
+clread_feeds() ->
     gen_server:call(?MODULE, read_feeds).
-
--spec changes_subscribe() -> term().
-%% Listen to the changes feed from couch, so new feeds are read as soon
-%% as they are added
-changes_subscribe() ->
-    gen_server:call(?MODULE, changes_subscribe).
-
--spec changes_unsubscribe() -> term().
-%% Stop listening to the changes feed
-changes_unsubscribe() ->
-    gen_server:call(?MODULE, changes_unsubscribe).
-
--spec opts() -> list().
-%% Options for connecting to couchdb, these should extracted into a config
-%% file 
-opts() ->
-    [{host, "dale:tmppass@127.0.0.1:5984"},
-     {db, "settee"}].
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 init([]) ->
-    {ok, #state{couch_opts = opts()}, timeout()}.
+    {ok, #state{couch_started = false}, timer:seconds(0)}.
 
 %% callbacks
 handle_call(read_feeds, _From, State) ->
-    read_feeds(State#state.couch_opts),
+    read_feeds(),
     {reply, ok, State, timeout()};
-
-handle_call(changes_subscribe, _From, State) ->
-    Opts  = State#state.couch_opts,
-    Since = dh_json:get([<<"update_seq">>], dh_couch:db_info(Opts)),
-    Fun   = fun(Data) -> notification(Opts, Data) end,
-    Pid   = dh_couch:changes(Opts, Since, Fun),
-    {reply, ok, State#state{changes_pid = Pid}, timeout()};
-
-handle_call(changes_unsubscribe, _From, State) ->
-    exit(State#state.changes_pid, normal),
-    {reply, ok, State#state{changes_pid = undefined}, timeout()};    
 
 handle_call(_Request, _From, State) ->
     {reply, ok, State, timeout()}.
@@ -72,8 +48,21 @@ handle_call(_Request, _From, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State, timeout()}.
 
+handle_info(_Info, #state{couch_started = false}) ->
+    
+    {ok, Host} = application:get_env(setteed, couch_host),
+    {ok, Db}   = application:get_env(setteed, couch_db),
+    Couch = dh_couch_srv:create_spec(Host, Db, couch_api, fun notification/1),
+    
+    % If this server has crashed, couch srv may already be started
+    case supervisor:start_child(setteed_sup, Couch) of 
+        {ok, _Pid}                       -> ok;
+        {error, {already_started, _Pid}} -> ok
+    end,
+    
+    {noreply, #state{couch_started = true}, timeout()};
 handle_info(_Info, State) ->
-    read_feeds(State#state.couch_opts),
+    read_feeds(),
     {noreply, State, timeout()}.
 
 terminate(_Reason, _State) ->
@@ -85,14 +74,14 @@ code_change(_OldVsn, State, _Extra) ->
 feeds_expire() ->
     get_unix_timestamp(erlang:now()) - (1 * 60 * 10).
 
-process_read_feeds(Opts) ->
-    Items = dh_couch:view(Opts, "items-to-process"),
-    Fun   = fun(X, Y) -> save_to_doc(Opts, X, Y) end,
-    Res   = lists:foldl(Fun, sets:new(), dh_json:get([<<"rows">>], Items)),
-    [ mark_processed(Opts, Id) || Id <- sets:to_list(Res) ],
+process_read_feeds() ->
+    Items = dh_couch_srv:view(couch_api, "items-to-process"),
+    Res   = lists:foldl(fun save_to_doc/2, sets:new(),
+                        dh_json:get([<<"rows">>], Items)),
+    [ mark_processed(Id) || Id <- sets:to_list(Res) ],
     ok.
 
-save_to_doc(Opts, Item, Set) ->
+save_to_doc(Item, Set) ->
     try
         ViewDoc = dh_json:get([<<"value">>], Item),        
         Id      = l2b(md5_hex(b2l(dh_json:get([<<"body">>], ViewDoc)))),        
@@ -100,7 +89,7 @@ save_to_doc(Opts, Item, Set) ->
         Doc2 = dh_json:set([<<"_id">>], Id, Doc1),
         Doc3 = dh_json:set([<<"type">>], <<"feeditem">>, Doc2),
         
-        dh_couch:save_doc(Opts, Doc3),        
+        dh_couch_srv:save_doc(couch_api, Doc3),        
         sets:add_element(dh_json:get([<<"sourceId">>], ViewDoc), Set)
     catch
         _Err:_ ->
@@ -108,29 +97,32 @@ save_to_doc(Opts, Item, Set) ->
             Set
     end.
 
-mark_processed(Opts, Id) ->
-    Doc  = dh_couch:doc(Opts, Id),
+mark_processed(Id) ->
+    Doc  = dh_couch_srv:doc(couch_api, Id),
     Doc2 = dh_json:set([<<"processed">>], true, Doc),
-    dh_couch:save_doc(Opts, Doc2),
+    dh_couch_srv:save_doc(couch_api, Doc2),
     ok.    
     
-read_feeds(Opts) ->
+read_feeds() ->
+    log("here1"),
     Params = [{"startkey", 0}, {"endkey", feeds_expire()}],
-    Feeds = dh_couch:view(Opts, "feeds-to-scrape", Params),
-    [ scrape_feed(Opts, Feed) || Feed <- dh_json:get([<<"rows">>], Feeds) ],
-    process_read_feeds(Opts).
+    log("here2"),
+    Feeds = dh_couch_srv:view(couch_api, "feeds-to-scrape", Params),
+    log("here3"),
+    [ scrape_feed(Feed) || Feed <- dh_json:get([<<"rows">>], Feeds) ],
+    log("here4"),
+    process_read_feeds().
 
-scrape_feed(Opts, Feed) ->
+scrape_feed(Feed) ->
     
     Time = get_unix_timestamp(erlang:now()),
     Id   = dh_json:get([<<"value">>, <<"_id">>], Feed),
-    Url  = binary_to_list(Id),
 
-    NStatus = case dh_http:get(Url) of
+    NStatus = case dh_http:get(b2l(Id)) of
                   {error, no_scheme} ->                     
-                      {error, <<"InvalidUrl">>};
+                      {error, <<"Invalid Url">>};
                   {error, _} ->
-                      {error, <<"UnknownError">>};
+                      {error, <<"Unknown Error">>};
                   {_Url, _Hdrs, Body} ->
                       NId = l2b(md5_hex(Body)),
                       Doc = {struct, [ {<<"_id">>,     NId},
@@ -138,7 +130,7 @@ scrape_feed(Opts, Feed) ->
                                        {<<"type">>,    <<"batchfeed">>},
                                        {<<"body">>,    l2b(Body)},
                                        {<<"created">>, Time} ]},
-                      dh_couch:save_doc(Opts, Doc),
+                      dh_couch_srv:save_doc(couch_api, Doc),
                       ok
               end,             
     
@@ -157,13 +149,13 @@ scrape_feed(Opts, Feed) ->
     Doc4 = dh_json:set([<<"updated">>], Time, Doc3),
     Doc5 = dh_json:remove([<<"_deleted_conflicts">>], Doc4),
     
-    ok = dh_couch:save_doc(Opts, Doc5).
+    ok = dh_couch_srv:save_doc(couch_api, Doc5).
 
-notification(Opts, {_Url, _Hdrs, Json}) ->
+notification({_Url, _Hdrs, Json}) ->
+    log("new feed!"),
     case trigger_read(dh_json:get([<<"results">>], Json)) of
-        true  -> read_feeds(Opts);
-        false -> io:format("ignoring~n"),
-                 ok
+        true  -> read_feeds();
+        false -> ok
     end.
 
 trigger_read([]) ->
@@ -181,7 +173,7 @@ get_unix_timestamp(TS) ->
 
 md5_hex(S) ->
     Md5_bin  =  erlang:md5(S),
-    Md5_list = binary_to_list(Md5_bin),
+    Md5_list = b2l(Md5_bin),
     lists:flatten(list_to_hex(Md5_list)).
 
 list_to_hex(L) ->

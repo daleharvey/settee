@@ -7,6 +7,9 @@
           put/3,
           url_encode/1 ]).
 
+http_opts() ->
+    [{timeout, timer:seconds(5)}].
+
 get(Url) ->
     get(Url, []).
 get(Url, Params) ->
@@ -14,18 +17,22 @@ get(Url, Params) ->
 get(Url, Params, Opts) ->
     {NewUrl, _Headers, _Body}
         = prehttp([{get_params, Params} | Opts], {Url, [], []}),
-    case httpc:request(NewUrl) of
+    io:format("Fetching ~p ~p~n",[self(), NewUrl]),
+    case httpc:request(get, {NewUrl, []}, [], []) of
         {ok, {{_, 200, "OK"}, NHeaders, NBody}} ->
+            io:format("Got ~p~n",[NewUrl]),
             posthttp(Opts, {NewUrl, NHeaders, NBody});
-        Else -> Else
+        Else ->
+            io:format("Got ~p~n",[NewUrl]),
+            Else
     end.
 
 put(Url, Body, _Opts) ->
 
     Body1 = lists:flatten(io_lib:format("~s", [mochijson2:encode(Body)])),
     NOpts = {Url, [], "application/json", Body1},
-    
-    case httpc:request(put, NOpts, [], []) of
+    io:format("Puting ~p ~p~n",[self(), Url]),    
+    case httpc:request(put, NOpts, http_opts(), []) of
         {ok, {{_, 201, _}, _, _}} ->
             ok;
         Else ->
@@ -39,6 +46,8 @@ url_encode(Str) ->
 param_to_str({Key, Val}) ->
     Key ++ "=" ++ to_str(Val).
 
+pret({get_params, []}, Data) ->
+    Data;
 pret({get_params, List}, {Url, Headers, Body}) ->
     NewUrl = Url ++ "?" ++
         string:join([param_to_str(X) || X <- List], "&"),
