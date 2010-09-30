@@ -7,116 +7,102 @@
           handle_info/2, terminate/2, code_change/3 ]).
 
 -export([ create_spec/3, create_spec/4,
-          db_info/0, db_info/1, 
-          view/1, view/2, view/3,
-          %subscribe_changes/2, unsubscribe_changes/1,
-          doc/1, doc/2,
-          save_doc/1, save_doc/2,
-          stop/1 ]).
+          db_info/1, db_info/2, 
+          view/2, view/3, view/4,
+          doc/2, doc/3,
+          save_doc/2, save_doc/3 ]).
 
 -type json() :: tuple().
 
 -record(state, {
-          host        = undefined :: list(),
-          db          = undefined :: list(),
-          changes_pid = undefined :: pid(),
-          changes_cb  = undefined :: fun() 
+          host            = undefined :: list(),
+          db              = undefined :: list(),
+          changes_started = undefined :: pid(),
+          changes_cb      = undefined :: fun() 
          }).
 
+
 %%% interface
--spec create_spec(list(), list(), atom()) -> tuple().
+
+-spec create_spec(list(), list(), fun()) -> tuple().
 %% Generate a child specification to make it easier to add to supervision
 %% trees dynamically
 create_spec(Host, Db, Changes) ->
     create_spec(Host, Db, Changes, ?MODULE).
 
 create_spec(Host, Db, Changes, Name) ->
-    {?MODULE, {?MODULE, start_link, [Name, Host, Db, Changes]}, permanent, 5000,
-     worker, [?MODULE]}.
+    {?MODULE, {?MODULE, start_link, [Name, Host, Db, Changes]}, permanent,
+     5000, worker, [?MODULE]}.
 
 start_link(Name, Host, Db, Changes) ->
     gen_server:start_link({local, Name}, ?MODULE, [Host, Db, Changes], []).
 
--spec doc(atom(), list()) -> json().
+-spec doc(atom(), list()) -> ok.
 %% Fetch a document
-doc(Id) ->
-    doc(?MODULE, Id).
-doc(Name, Id) ->
-    gen_server:call(Name, {doc, Id}).
+doc(Id, Callback) ->
+    doc(?MODULE, Id, Callback).
+doc(Name, Id, Callback) ->
+    gen_server:call(Name, {doc, Id, Callback}).
 
 
--spec save_doc(json()) -> ok | {error, term()}.
+-spec save_doc(json(), fun()) -> ok.
 %% Save a document
-save_doc(Doc) ->
-    save_doc(?MODULE, Doc).
-save_doc(Name, Doc) ->
-    gen_server:call(Name, {save_doc, Doc}).
- 
+save_doc(Doc, Callback) ->
+    save_doc(?MODULE, Doc, Callback).
+save_doc(Name, Doc, Callback) ->
+    gen_server:call(Name, {save_doc, Doc, Callback}).
 
-db_info() ->
-    db_info(?MODULE).
-db_info(Name) ->
-    gen_server:call(Name, db_info).
+-spec db_info(fun()) -> ok.
+%% Pull information about a db
+db_info(Callback) ->
+    db_info(?MODULE, Callback).
+db_info(Name, Callback) ->
+    gen_server:call(Name, {db_info, Callback}).
 
-view(ViewName) ->
-    view(?MODULE, ViewName).
-view(Name, ViewName) ->
-    gen_server:call(Name, {view, ViewName, []});
-view(ViewName, Params) ->
-    view(?MODULE, ViewName, Params).
-view(Name, ViewName, Params) -> 
-   gen_server:call(Name, {view, ViewName, Params}).
+-spec view(list(), fun()) -> ok.
+%% Read a db view
+view(ViewName, Callback) ->
+    view(?MODULE, ViewName, [], Callback).
+view(ViewName, Params, Callback) ->
+    view(?MODULE, ViewName, Params, Callback).
+view(Name, ViewName, Params, Callback) ->
+    gen_server:call(Name, {view, ViewName, Params, Callback}).
 
-stop(Name) ->
-    gen_server:cast(Name, stop).
-
-%% callbacks
+%%% Callbacks
+-spec init(list()) -> term().
 init([Host, Db, Changes]) ->
     process_flag(trap_exit, true),
-    {ok, #state{host = Host, db = Db, changes_cb = Changes}, timer:seconds(0)}.
+    {ok, #state{host = Host, db = Db, changes_cb = Changes,
+                changes_started = false}, timer:seconds(0)}.
 
-handle_call({doc, Id}, _From, #state{host=Host, db=Db}=State) ->
-    {reply, doc(Host, Db, Id), State};
-handle_call({save_doc, Doc}, _From, #state{host=Host, db = Db}=State) ->
-    {reply, save_doc(Host, Db, Doc), State};
-handle_call(db_info, _From, #state{host=Host, db = Db}=State) ->
-    {reply, db_info(Host, Db), State};
-handle_call({view, Name, Params}, _From, #state{host=Host, db = Db}=State) ->
-    io:format("got here~n"),
-    {reply, view(Host, Db, Name, Params), State};
-handle_call({subscribe_changes, Cb}, _From, #state{host=Host, db=Db}=S) ->
-    Pid = changes(Host, Db, Cb),
-    {reply, ok, S#state{changes_pid = Pid, changes_cb = Cb}};
-handle_call(unsubscribe_changes, _From, State) ->
-    exit(State#state.changes_pid, normal),
-    {reply, ok, State#state{changes_pid = undefined, changes_cb = undefined}};
+-spec handle_call(term(), pid(), #state{}) -> term().
+handle_call({doc, Id, Cb}, _From, #state{host=Host, db=Db}=State) ->
+    {reply, doc(Host, Db, Id, Cb), State};
+handle_call({save_doc, Doc, Cb}, _From, #state{host=Host, db=Db}=State) ->
+    {reply, save_doc(Host, Db, Doc, Cb), State};
+handle_call({db_info, Cb}, _From, #state{host=Host, db=Db}=State) ->
+    {reply, db_info(Host, Db, Cb), State};
+handle_call({view, Name, Param, Cb}, _From, #state{host=Host, db=Db}=State) ->
+    {reply, view(Host, Db, Name, Param, Cb), State}.
 
-handle_call(_Request, _From, State) ->
-    io:format("~p~n", [_Request]),
-    {reply, ok, State}.
-
-
-handle_cast(stop, State) ->
-    {stop, normal, State};
+-spec handle_cast(term(), #state{}) -> term().
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+-spec handle_info(term(), #state{}) -> term().
 %% Set to automatically start the changes feed when the server starts
 %% useful for supervised servers
-handle_info(_Info, #state{changes_cb = Cb, changes_pid = Pid} = State)
-  when Cb =/= undefined andalso Pid =:= undefined ->
-    #state{host = Host, db = Db} = State,
-    NewPid = changes(Host, Db, Cb),
-    io:format("completes~n"),
-    {noreply, State#state{changes_pid = NewPid}};
+handle_info(_Info, #state{changes_started=false}=State) ->
+    #state{host=Host, db=Db, changes_cb=Cb} = State,
+    ok = changes(Host, Db, Cb),
+    {noreply, State#state{changes_started = true}};
 
 %% The fun that long polls will be killed from time to time due to
 %% recompilation, restart it when that happens
-handle_info({'EXIT', Pid, killed}, #state{changes_pid=Pid} = State) ->
-    #state{host=Host, db=Db, changes_pid=Pid, changes_cb=Cb} = State,
-    NewPid = changes(Host, Db, Cb),
-    io:format("completes~n"),
-    {noreply, #state{changes_pid = NewPid}};
+handle_info({'EXIT', _Pid, killed}, State) ->
+    #state{host=Host, db=Db, changes_cb=Cb} = State,
+    ok = changes(Host, Db, Cb),
+    {noreply, State};
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -128,60 +114,58 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 
-%% callbacks
-doc(Host, Db, Id) ->
+%%% callbacks
+-spec doc(list(), list(), list(), fun()) -> ok.
+doc(Host, Db, Id, Cb) ->
     Url = str("http://~s/~s/~s", [Host, Db, dh_http:url_encode(Id)]),
-    {_Url, _Hdrs, Body} = dh_http:get(Url, [], [{type, json}]),
-    Body.
+    dh_http:get(Url, [], [{type, json}], Cb).
 
-db_info(Host, Db) ->
+-spec db_info(list(), list(), fun()) -> ok.
+db_info(Host, Db, Cb) ->
     Url = str("http://~s/~s/", [Host, Db]),
-    {_Url, _Hdrs, Body} = dh_http:get(Url, [], [{type, json}]),
-    Body.
+    dh_http:get(Url, [], [{type, json}], Cb).
 
-view(Host, Db, Name, Params) ->
+-spec view(list(), list(), string(), list(), fun()) -> ok.
+view(Host, Db, Name, Params, Cb) ->
     Url = str("http://~s/~s/_design/~s/_view/~s", [Host, Db, Db, Name]),
-    io:format("fetching ~p~n",[Url]),
-    {_Url, _Hdrs, Body} = dh_http:get(Url, Params, [{type, json}]),
-    Body.
+    dh_http:get(Url, Params, [{type, json}], Cb).
 
-save_doc(Host, Db, Doc) ->
+-spec save_doc(list(), list(), json(), fun()) -> ok.
+save_doc(Host, Db, Doc, Cb) ->
     Id  = dh_json:get([<<"_id">>], Doc), 
     Url = str("http://~s/~s/~s", [Host, Db, dh_http:url_encode(Id)]),    
-    dh_http:put(Url, Doc, [{type, json}]).
+    dh_http:put(Url, Doc, [{type, json}], Cb).
 
-%% This process will be killed by the vm on recompile
-%% need to persist
-changes(Host, Db, Callback) ->
-    io:format("changes starts~n"),
-    Since = dh_json:get([<<"update_seq">>], db_info(Host, Db)),
-    changes(Host, Db, Since, Callback).
-
-changes(Host, Db, Since, Callback) ->
-    Req = fun(Self, TSince) ->
-                  
-                  Params = [{"since", TSince},
-                            {"include_docs", true},
-                            {"feed", "longpoll"},
-                            {"heartbeat", 10000}],
-                  
+-spec changes(list(), list(), fun()) -> ok.
+changes(Host, Db, Cb) ->
+    Srv = self(),
+    Fun = fun({_, _, Body}) ->
                   Url = str("http://~s/~s/_changes", [Host, Db]),
-                  Res = {_Url, _Hdrs, Body}
-                      = dh_http:get(Url, Params, [{type, json}]),
-                  
-                  try   Callback(Res)
-                  catch Type:Err ->
-                          io:format("Type: ~p~nError: ~p~nStack: ~p~n",
-                                    [Type, Err, erlang:get_stacktrace()]),
-                          ok
-                  end,
-                  
-                  Self(Self, dh_json:get([<<"last_seq">>], Body))
+                  Fun = fun(Data) -> db_changed(Host, Db, Srv, Data, Cb) end,
+                  Params = params(dh_json:get([<<"update_seq">>], Body)),
+                  dh_http:get(Url, Params, [{type, json}, {link, Srv}], Fun)
           end,
+    db_info(Host, Db, Fun).
 
-    Pid = spawn_link( fun() -> Req(Req, Since) end ),
-    io:format("changes ends~n"),
-    Pid.
+db_changed(Host, Db, Srv, {_, _, Json} = Res, Callback) ->
+    
+    try   Callback(Res)
+    catch Type:Err ->
+            Stack = erlang:get_stacktrace(),
+            io:format("Type: ~p~nError: ~p~nStack: ~p~n", [Type, Err, Stack])
+    end,
+    
+    Url    = str("http://~s/~s/_changes", [Host, Db]),
+    Params = params(dh_json:get([<<"last_seq">>], Json)),
+    Fun    = fun(X) -> db_changed(Host, Db, Srv, X, Callback) end,
+    dh_http:get(Url, Params, [{type, json}, {link, Srv}], Fun).
+
+-spec params(integer()) -> list().
+params(Since) ->
+    [{"since",        Since},
+     {"include_docs", true},
+     {"feed",         "longpoll"},
+     {"heartbeat",    10000}].
 
 str(Str, Args) ->
     lists:flatten(io_lib:format(Str, Args)).

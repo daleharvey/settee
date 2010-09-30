@@ -3,41 +3,52 @@
 % get("http://google.com").
 % get("http://google.com", [{"q", "test"}])
 -module(dh_http).
--export([ get/1, get/2, get/3,
-          put/3,
+-export([ get/4,
+          put/4,
           url_encode/1 ]).
 
 http_opts() ->
     [{timeout, timer:seconds(5)}].
 
-get(Url) ->
-    get(Url, []).
-get(Url, Params) ->
-    get(Url, Params, []).
-get(Url, Params, Opts) ->
+get(Url, Params, Opts, Callback) ->
     {NewUrl, _Headers, _Body}
         = prehttp([{get_params, Params} | Opts], {Url, [], []}),
     io:format("Fetching ~p ~p~n",[self(), NewUrl]),
-    case httpc:request(get, {NewUrl, []}, [], []) of
-        {ok, {{_, 200, "OK"}, NHeaders, NBody}} ->
-            io:format("Got ~p~n",[NewUrl]),
-            posthttp(Opts, {NewUrl, NHeaders, NBody});
-        Else ->
-            io:format("Got ~p~n",[NewUrl]),
-            Else
+    spawn(fun() ->
+                  do_link(Opts),
+                  
+                  case httpc:request(get, {NewUrl, []}, [], []) of
+                      {ok, {{_, 200, "OK"}, NHeaders, NBody}} ->
+                          io:format("Got ~p~n",[NewUrl]),
+                          Callback(posthttp(Opts, {NewUrl, NHeaders, NBody}));
+                      Else ->
+                          io:format("Got ~p~n",[NewUrl]),
+                          Callback(Else)
+                  end
+          end),
+    ok.
+
+do_link(Opts) ->
+    case lists:keyfind(link, 1, Opts) of
+        {link, Pid} ->
+            link(Pid);
+        false -> ok
     end.
 
-put(Url, Body, _Opts) ->
+put(Url, Body, _Opts, Callback) ->
 
     Body1 = lists:flatten(io_lib:format("~s", [mochijson2:encode(Body)])),
     NOpts = {Url, [], "application/json", Body1},
-    io:format("Puting ~p ~p~n",[self(), Url]),    
-    case httpc:request(put, NOpts, http_opts(), []) of
-        {ok, {{_, 201, _}, _, _}} ->
-            ok;
-        Else ->
-            Else
-    end.
+    io:format("Puting ~p ~p~n",[self(), Url]),
+    spawn(fun() ->
+                  case httpc:request(put, NOpts, http_opts(), []) of
+                      {ok, {{_, 201, _}, _, _}} ->
+                          Callback(ok);
+                      Else ->
+                          Callback(Else)
+                  end
+          end),
+    ok.
 
 url_encode(Str) ->
     Str1 = re:replace(Str, " ", "%20", [global, {return, list}]),

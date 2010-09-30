@@ -6,8 +6,7 @@
           handle_info/2, terminate/2, code_change/3 ]).
 
 %% Main interface functions
--export([ start/0,
-          clread_feeds/0 ]).
+-export([ start/0 ]).
 
 -record(state, {
           couch_started = false :: atom()
@@ -26,11 +25,6 @@ start() ->
 timeout() ->
     timer:minutes(2).
 
--spec read_feeds() -> term().
-%% Just for command like debugging, invoke the reader
-clread_feeds() ->
-    gen_server:call(?MODULE, read_feeds).
-
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
@@ -38,10 +32,6 @@ init([]) ->
     {ok, #state{couch_started = false}, timer:seconds(0)}.
 
 %% callbacks
-handle_call(read_feeds, _From, State) ->
-    read_feeds(),
-    {reply, ok, State, timeout()};
-
 handle_call(_Request, _From, State) ->
     {reply, ok, State, timeout()}.
 
@@ -52,9 +42,9 @@ handle_info(_Info, #state{couch_started = false}) ->
     
     {ok, Host} = application:get_env(setteed, couch_host),
     {ok, Db}   = application:get_env(setteed, couch_db),
-    Couch = dh_couch_srv:create_spec(Host, Db, couch_api, fun notification/1),
+    Couch = dh_couch_srv:create_spec(Host, Db, fun notification/1),
     
-    % If this server has crashed, couch srv may already be started
+    %% If this server has crashed, couch srv may already be started
     case supervisor:start_child(setteed_sup, Couch) of 
         {ok, _Pid}                       -> ok;
         {error, {already_started, _Pid}} -> ok
@@ -75,21 +65,23 @@ feeds_expire() ->
     get_unix_timestamp(erlang:now()) - (1 * 60 * 10).
 
 process_read_feeds() ->
-    Items = dh_couch_srv:view(couch_api, "items-to-process"),
-    Res   = lists:foldl(fun save_to_doc/2, sets:new(),
-                        dh_json:get([<<"rows">>], Items)),
-    [ mark_processed(Id) || Id <- sets:to_list(Res) ],
+    Fun = fun({_,_,Body}) ->
+                  Res  = lists:foldl(fun save_to_doc/2, sets:new(),
+                                     dh_json:get([<<"rows">>], Body)),
+                  [ mark_processed(Id) || Id <- sets:to_list(Res) ]
+          end,
+    dh_couch_srv:view("items-to-process", Fun),
     ok.
 
 save_to_doc(Item, Set) ->
     try
         ViewDoc = dh_json:get([<<"value">>], Item),        
-        Id      = l2b(md5_hex(b2l(dh_json:get([<<"body">>], ViewDoc)))),        
+        Id      = l2b(md5_hex(b2l(dh_json:get([<<"body">>], ViewDoc)))),
         Doc1 = dh_json:set([<<"read">>], false, ViewDoc),
         Doc2 = dh_json:set([<<"_id">>], Id, Doc1),
         Doc3 = dh_json:set([<<"type">>], <<"feeditem">>, Doc2),
         
-        dh_couch_srv:save_doc(couch_api, Doc3),        
+        dh_couch_srv:save_doc(Doc3, fun(_X) -> ok end),        
         sets:add_element(dh_json:get([<<"sourceId">>], ViewDoc), Set)
     catch
         _Err:_ ->
@@ -98,58 +90,64 @@ save_to_doc(Item, Set) ->
     end.
 
 mark_processed(Id) ->
-    Doc  = dh_couch_srv:doc(couch_api, Id),
-    Doc2 = dh_json:set([<<"processed">>], true, Doc),
-    dh_couch_srv:save_doc(couch_api, Doc2),
+    Fun = fun({_, _, Doc}) ->
+                  Doc2 = dh_json:set([<<"processed">>], true, Doc),
+                  dh_couch_srv:save_doc(Doc2, fun(_X) -> ok end)
+          end,
+    dh_couch_srv:doc(Id, Fun),
     ok.    
-    
+
 read_feeds() ->
-    log("here1"),
+    Fun = fun({_, _, Feeds}) ->
+                  [ scrape_feed(Feed) ||
+                      Feed <- dh_json:get([<<"rows">>], Feeds) ],
+                  process_read_feeds()
+          end,
     Params = [{"startkey", 0}, {"endkey", feeds_expire()}],
-    log("here2"),
-    Feeds = dh_couch_srv:view(couch_api, "feeds-to-scrape", Params),
-    log("here3"),
-    [ scrape_feed(Feed) || Feed <- dh_json:get([<<"rows">>], Feeds) ],
-    log("here4"),
-    process_read_feeds().
+    dh_couch_srv:view("feeds-to-scrape", Params, Fun),
+    ok.
 
 scrape_feed(Feed) ->
     
     Time = get_unix_timestamp(erlang:now()),
     Id   = dh_json:get([<<"value">>, <<"_id">>], Feed),
+    log("here"),
+    Fun = fun(Data) ->
+                  NStatus = case Data of
+                                {error, no_scheme} ->                     
+                                    {error, <<"Invalid Url">>};
+                                {error, _} ->
+                                    {error, <<"Unknown Error">>};
+                                {_Url, _Hdrs, Body} ->
+                                    NId = l2b(md5_hex(Body)),
+                                    Doc = {struct, [ {<<"_id">>,     NId},
+                                                     {<<"source">>,  Id},
+                                                     {<<"type">>,    <<"batchfeed">>},
+                                                     {<<"body">>,    l2b(Body)},
+                                                     {<<"created">>, Time} ]},
+                                    dh_couch_srv:save_doc(Doc, fun(_X) -> ok end),
+                                    ok
+                            end, 
+                  
+                  St = case NStatus of
+                           ok ->
+                               {struct, [{<<"text">>, <<"updated">>},
+                                         {<<"cssClass">>, <<"ok">>}]};
+                           {error, Reason} ->
+                               {struct, [{<<"text">>, Reason},
+                                         {<<"cssClass">>, <<"error">>}]}
+                       end,
+                  
+                  Doc1 = dh_json:get([<<"value">>], Feed),    
+                  Doc2 = dh_json:set([<<"status">>], St, Doc1),
+                  Doc3 = dh_json:set([<<"processed">>], false, Doc2),
+                  Doc4 = dh_json:set([<<"updated">>], Time, Doc3),
+                  Doc5 = dh_json:remove([<<"_deleted_conflicts">>], Doc4),
+                  
+                  dh_couch_srv:save_doc(Doc5, fun(_X) -> ok end)
+          end,
+    dh_http:get(b2l(Id), [], [], Fun).
 
-    NStatus = case dh_http:get(b2l(Id)) of
-                  {error, no_scheme} ->                     
-                      {error, <<"Invalid Url">>};
-                  {error, _} ->
-                      {error, <<"Unknown Error">>};
-                  {_Url, _Hdrs, Body} ->
-                      NId = l2b(md5_hex(Body)),
-                      Doc = {struct, [ {<<"_id">>,     NId},
-                                       {<<"source">>,  Id},
-                                       {<<"type">>,    <<"batchfeed">>},
-                                       {<<"body">>,    l2b(Body)},
-                                       {<<"created">>, Time} ]},
-                      dh_couch_srv:save_doc(couch_api, Doc),
-                      ok
-              end,             
-    
-    St = case NStatus of
-             ok ->
-                 {struct, [{<<"text">>, <<"updated">>},
-                           {<<"cssClass">>, <<"ok">>}]};
-             {error, Reason} ->
-                 {struct, [{<<"text">>, Reason},
-                           {<<"cssClass">>, <<"error">>}]}
-         end,
-
-    Doc1 = dh_json:get([<<"value">>], Feed),    
-    Doc2 = dh_json:set([<<"status">>], St, Doc1),
-    Doc3 = dh_json:set([<<"processed">>], false, Doc2),
-    Doc4 = dh_json:set([<<"updated">>], Time, Doc3),
-    Doc5 = dh_json:remove([<<"_deleted_conflicts">>], Doc4),
-    
-    ok = dh_couch_srv:save_doc(couch_api, Doc5).
 
 notification({_Url, _Hdrs, Json}) ->
     log("new feed!"),
